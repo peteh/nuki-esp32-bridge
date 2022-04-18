@@ -3,9 +3,19 @@
  * author Jeroen
  */
 
-#include "Arduino.h"
-#include "NukiBle.h"
-#include "NukiConstants.h"
+#include <Arduino.h>
+#include <NukiBle.h>
+#include <NukiConstants.h>
+
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <PubSubClient.h>
+#include <ArduinoOTA.h>
+
+#include <MqttDevice.h>
+
+#include "utils.h"
+#include "config.h"
 
 uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
@@ -18,106 +28,67 @@ std::list<Nuki::KeypadEntry> requestedKeypadEntries;
 std::list<Nuki::AuthorizationEntry> requestedAuthorizationEntries;
 std::list<Nuki::TimeControlEntry> requestedTimeControlEntries;
 
+WiFiClient net;
+PubSubClient client(net);
+const char *HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status";
+const char *HOMEASSISTANT_STATUS_TOPIC_ALT = "ha/status";
 
-void batteryReport() {
+MqttLock mqttLock(composeClientID().c_str(), "lock", "Nuki", "lock");
+
+void batteryReport()
+{
   uint8_t result = nukiBle.requestBatteryReport(&_batteryReport);
-  if (result == 1) {
+  if (result == 1)
+  {
     log_d("Bat report voltage: %d Crit state: %d, start temp: %d", _batteryReport.batteryVoltage, _batteryReport.criticalBatteryState, _batteryReport.startTemperature);
-  } else {
+  }
+  else
+  {
     log_d("Bat report failed: %d", result);
   }
 }
 
-bool keyTurnerState() {
+bool getKeyTurnerStateFromLock()
+{
   uint8_t result = nukiBle.requestKeyTurnerState(&retrievedKeyTurnerState);
-  if (result == 1) {
+  if (result == 1)
+  {
     log_d("Bat crit: %d, Bat perc:%d lock state: %d %d:%d:%d",
           nukiBle.isBatteryCritical(), nukiBle.getBatteryPerc(), retrievedKeyTurnerState.lockState, retrievedKeyTurnerState.currentTimeHour,
           retrievedKeyTurnerState.currentTimeMinute, retrievedKeyTurnerState.currentTimeSecond);
-  } else {
+  }
+  else
+  {
     log_d("cmd failed: %d", result);
   }
   return result;
 }
 
-void requestLogEntries() {
-  uint8_t result = nukiBle.retrieveLogEntries(0, 10, 0, true);
-  if (result == 1) {
-    delay(5000);
-    nukiBle.getLogEntries(&requestedLogEntries);
-    std::list<Nuki::LogEntry>::iterator it = requestedLogEntries.begin();
-    while (it != requestedLogEntries.end()) {
-      log_d("Log[%d] %d-%d-%d %d:%d:%d", it->index, it->timeStampYear, it->timeStampMonth, it->timeStampDay, it->timeStampHour, it->timeStampMinute, it->timeStampSecond);
-      it++;
-    }
-  } else {
-    log_d("get log failed: %d", result);
-  }
+void publishConfig(MqttDevice *device)
+{
+  String payload = device->getHomeAssistantConfigPayload();
+  char topic[255];
+  device->getHomeAssistantConfigTopic(topic, sizeof(topic));
+  client.publish(topic, payload.c_str());
+
+  device->getHomeAssistantConfigTopicAlt(topic, sizeof(topic));
+  client.publish(topic,
+                 payload.c_str());
 }
 
-void requestKeyPadEntries() {
-  uint8_t result = nukiBle.retrieveKeypadEntries(0, 10);
-  if (result == 1) {
-    delay(5000);
-    nukiBle.getKeypadEntries(&requestedKeypadEntries);
-    std::list<Nuki::KeypadEntry>::iterator it = requestedKeypadEntries.begin();
-    while (it != requestedKeypadEntries.end()) {
-      log_d("Keypad entry[%d] %d", it->codeId, it->code);
-      it++;
-    }
-  } else {
-    log_d("get keypadentries failed: %d", result);
+void publishLockState(Nuki::NukiBle &nuki)
+{
+  Nuki::KeyTurnerState state;
+  nukiBle.retrieveKeyTunerState(&state);
+  if(state.lockState == Nuki::LockState::Locked)
+  {
+    client.publish(mqttLock.getStateTopic(), mqttLock.getLockedState());
   }
-}
-
-void requestAuthorizationEntries() {
-  uint8_t result = nukiBle.retrieveAuthorizationEntries(0, 10);
-  if (result == 1) {
-    delay(5000);
-    nukiBle.getAuthorizationEntries(&requestedAuthorizationEntries);
-    std::list<Nuki::AuthorizationEntry>::iterator it = requestedAuthorizationEntries.begin();
-    while (it != requestedAuthorizationEntries.end()) {
-      log_d("Authorization entry[%d] type: %d name: %s", it->authId, it->idType, it->name);
-      it++;
-    }
-  } else {
-    log_d("get authorization entries failed: %d", result);
+  else
+  {
+    client.publish(mqttLock.getStateTopic(), mqttLock.getUnlockedState());
   }
-}
-
-void setPincode(uint16_t pincode) {
-  uint8_t result = nukiBle.setSecurityPin(pincode);
-  if (result == 1) {
-    log_d("Set pincode done");
-
-  } else {
-    log_d("Set pincode failed: %d", result);
-  }
-}
-
-void addTimeControl(uint8_t weekdays, uint8_t hour, uint8_t minute, Nuki::LockAction lockAction) {
-  Nuki::NewTimeControlEntry newEntry;
-  newEntry.weekdays = weekdays;
-  newEntry.timeHour = hour;
-  newEntry.timeMin = minute;
-  newEntry.lockAction = lockAction;
-
-  nukiBle.addTimeControlEntry(newEntry);
-}
-
-void requestTimeControlEntries() {
-  Nuki::CmdResult result = nukiBle.retrieveTimeControlEntries();
-  if (result == Nuki::CmdResult::Success) {
-    delay(5000);
-    nukiBle.getTimeControlEntries(&requestedTimeControlEntries);
-    std::list<Nuki::TimeControlEntry>::iterator it = requestedTimeControlEntries.begin();
-    while (it != requestedTimeControlEntries.end()) {
-      log_d("TimeEntry[%d] weekdays:%d %d:%d enabled: %d lock action: %d", it->entryId, it->weekdays, it->timeHour, it->timeMin, it->enabled, it->lockAction);
-      it++;
-    }
-  } else {
-    log_d("get log failed: %d, error %d", result, nukiBle.getLastError());
-  }
+  
 }
 
 void getConfig() {
@@ -130,57 +101,183 @@ void getConfig() {
 
 }
 
+void connectToMqtt()
+{
+  Serial.print("\nconnecting to MQTT...");
+  // TODO: add security settings back to mqtt
+  // while (!client.connect(mqtt_client, mqtt_user, mqtt_pass))
+  while (!client.connect(composeClientID().c_str()))
+  {
+    Serial.print(".");
+    delay(4000);
+  }
+
+  client.subscribe(mqttLock.getCommandTopic(), 1);
+
+  client.subscribe(HOMEASSISTANT_STATUS_TOPIC);
+  client.subscribe(HOMEASSISTANT_STATUS_TOPIC_ALT);
+
+  publishConfig(&mqttLock);
+}
+
+void connectToWifi()
+{
+  Serial.print("Connecting to wifi...");
+  // TODO: really forever? What if we want to go back to autoconnect?
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print(".");
+    delay(1000);
+  }
+  Serial.println("\n Wifi connected!");
+}
+
+bool newCommandAvailable = false;
+Nuki::LockAction newCommand = Nuki::LockAction::Lock;
+
+
 bool notified = false;
-class Handler: public Nuki::SmartlockEventHandler {
-  public:
-    virtual ~Handler() {};
-    void notify(Nuki::EventType eventType) {
+class Handler : public Nuki::SmartlockEventHandler
+{
+public:
+  virtual ~Handler(){};
+  void notify(Nuki::EventType eventType)
+  {
+    if (eventType == Nuki::EventType::KeyTurnerStatusUpdated)
+    {
       notified = true;
     }
+  }
 };
 
 Handler handler;
 
-void setup() {
+void callback(char *topic, byte *payload, unsigned int length)
+{
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (unsigned int i = 0; i < length; i++)
+  {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+  // TODO length check
+
+  if (strcmp(topic, mqttLock.getCommandTopic()) == 0)
+  {
+    if (strncmp((char *)payload, mqttLock.getLockCommand(), length) == 0)
+    {
+      newCommand = Nuki::LockAction::Lock;
+      newCommandAvailable = true;
+    }
+    else if (strncmp((char *)payload, mqttLock.getUnlockCommand(), length) == 0)
+    {
+      newCommand = Nuki::LockAction::Unlock;
+      newCommandAvailable = true;
+    }
+    else if (strncmp((char *)payload, mqttLock.getOpenCommand(), length) == 0)
+    {
+      newCommand = Nuki::LockAction::Unlatch;
+      newCommandAvailable = true;
+    }
+
+    // TODO: error unknown command
+  }
+
+  // publish config when homeassistant comes online and needs the configuration again
+  else if (strcmp(topic, HOMEASSISTANT_STATUS_TOPIC) == 0 ||
+           strcmp(topic, HOMEASSISTANT_STATUS_TOPIC_ALT) == 0)
+  {
+    if (strncmp((char *)payload, "online", length) == 0)
+    {
+      publishConfig(&mqttLock);
+    }
+  }
+}
+void setup()
+{
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
   Serial.begin(115200);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.hostname(composeClientID().c_str());
+  WiFi.begin(wifi_ssid, wifi_pass);
+
+  connectToWifi();
+
+  Serial.println();
+  Serial.print("Connected to SSID: ");
+  Serial.println(wifi_ssid);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+
+  client.setBufferSize(512);
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+
   log_d("Starting NUKI BLE...");
   scanner.initialize();
   nukiBle.registerBleScanner(&scanner);
   nukiBle.initialize();
-  
 
-  if (nukiBle.isPairedWithLock()) {
+  if (nukiBle.isPairedWithLock())
+  {
     log_d("paired");
     nukiBle.setEventHandler(&handler);
     getConfig();
     nukiBle.enableLedFlash(false);
   }
-  nukiBle.saveSecurityPincode(190);
+  nukiBle.saveSecurityPincode(nuki_pin);
   // nukiBle.unPairNuki();
 }
+unsigned long last_update = 0;
 
-void loop() {
+void loop()
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    connectToWifi();
+  }
+  if (!client.connected())
+  {
+    connectToMqtt();
+  }
+  client.loop();
+
   scanner.update();
-  if (!nukiBle.isPairedWithLock()) {
+  if (!nukiBle.isPairedWithLock())
+  {
     digitalWrite(LED_BUILTIN, LOW);
-    if (nukiBle.pairNuki()) {
+    if (nukiBle.pairNuki())
+    {
       log_d("paired");
       nukiBle.setEventHandler(&handler);
       getConfig();
     }
   }
 
-  sleep(5);
+  if(newCommandAvailable)
+  {
+    Nuki::LockAction action = newCommand;
+    newCommandAvailable = false;
+    // TODO: use proper nonce
+    if(nukiBle.lockAction(action, deviceId, 0, NULL, 0) == Nuki::CmdResult::Success)
+    {
+      // dirty hack to force an update
+      sleep(8);
+      notified = true;
+    }
+  }
 
-  nukiBle.lockAction(Nuki::LockAction::Lock, deviceId, 0, NULL, 0);
-
-  sleep(7);
-  nukiBle.lockAction(Nuki::LockAction::Unlock, deviceId, 0, NULL, 0);
-  if (notified) {
-    if (keyTurnerState()) {
+  if (notified || millis() - last_update > 60000)
+  {
+    if (getKeyTurnerStateFromLock())
+    {
       notified = false;
+      publishLockState(nukiBle);
+      last_update = millis();
     }
   }
   delay(500);

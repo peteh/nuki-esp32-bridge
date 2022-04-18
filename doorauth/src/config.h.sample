@@ -1,0 +1,12 @@
+#pragma once
+#include <Arduino.h>
+char wifi_ssid[] = "iot";        // your network SSID (name)
+char wifi_pass[] = "yourpass"; // your network password (use for WPA, or use as key for WEP)
+
+// mqtt server
+char mqtt_server[255] = "192.168.2.50";
+uint16_t mqtt_port = 1883;
+char mqtt_user[60] = "";
+char mqtt_pass[60] = "";
+
+uint16_t nuki_pin = 1337;

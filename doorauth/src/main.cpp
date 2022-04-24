@@ -32,8 +32,9 @@ WiFiClient net;
 PubSubClient client(net);
 const char *HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status";
 const char *HOMEASSISTANT_STATUS_TOPIC_ALT = "ha/status";
-
-MqttLock mqttLock(composeClientID().c_str(), "lock", "Nuki", "lock");
+MqttDevice mqttDevice(composeClientID().c_str(), "Nuki", "Nuki ESP32 Bridge", "maker_pt");
+MqttLock mqttLock(&mqttDevice, "lock", "Nuki");
+MqttSensor mqttBattery(&mqttDevice, "battery", "Nuki");
 
 void batteryReport()
 {
@@ -64,16 +65,24 @@ bool getKeyTurnerStateFromLock()
   return result;
 }
 
-void publishConfig(MqttDevice *device)
+
+void publishConfig(MqttEntity *entity)
 {
-  String payload = device->getHomeAssistantConfigPayload();
+  String payload = entity->getHomeAssistantConfigPayload();
   char topic[255];
-  device->getHomeAssistantConfigTopic(topic, sizeof(topic));
+  entity->getHomeAssistantConfigTopic(topic, sizeof(topic));
   client.publish(topic, payload.c_str());
 
-  device->getHomeAssistantConfigTopicAlt(topic, sizeof(topic));
+  entity->getHomeAssistantConfigTopicAlt(topic, sizeof(topic));
   client.publish(topic,
                  payload.c_str());
+}
+
+
+void publishConfig()
+{
+  publishConfig(&mqttLock);
+  publishConfig(&mqttBattery);
 }
 
 void publishLockState(Nuki::NukiBle &nuki)
@@ -117,7 +126,7 @@ void connectToMqtt()
   client.subscribe(HOMEASSISTANT_STATUS_TOPIC);
   client.subscribe(HOMEASSISTANT_STATUS_TOPIC_ALT);
 
-  publishConfig(&mqttLock);
+  publishConfig();
 }
 
 void connectToWifi()
@@ -191,7 +200,7 @@ void callback(char *topic, byte *payload, unsigned int length)
   {
     if (strncmp((char *)payload, "online", length) == 0)
     {
-      publishConfig(&mqttLock);
+      publishConfig();
     }
   }
 }

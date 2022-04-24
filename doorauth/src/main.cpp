@@ -34,7 +34,7 @@ const char *HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status";
 const char *HOMEASSISTANT_STATUS_TOPIC_ALT = "ha/status";
 MqttDevice mqttDevice(composeClientID().c_str(), "Nuki", "Nuki ESP32 Bridge", "maker_pt");
 MqttLock mqttLock(&mqttDevice, "lock", "Nuki");
-MqttSensor mqttBattery(&mqttDevice, "battery", "Nuki");
+MqttSensor mqttBattery(&mqttDevice, "battery", "Nuki Battery");
 
 void batteryReport()
 {

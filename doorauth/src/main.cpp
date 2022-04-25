@@ -34,7 +34,9 @@ const char *HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status";
 const char *HOMEASSISTANT_STATUS_TOPIC_ALT = "ha/status";
 MqttDevice mqttDevice(composeClientID().c_str(), "Nuki", "Nuki ESP32 Bridge", "maker_pt");
 MqttLock mqttLock(&mqttDevice, "lock", "Nuki");
+
 MqttSensor mqttBattery(&mqttDevice, "battery", "Nuki Battery");
+MqttBinarySensor mqttBatteryCritical(&mqttDevice, "battery_critical", "Nuki Battery Critical");
 
 void batteryReport()
 {
@@ -65,7 +67,6 @@ bool getKeyTurnerStateFromLock()
   return result;
 }
 
-
 void publishConfig(MqttEntity *entity)
 {
   String payload = entity->getHomeAssistantConfigPayload();
@@ -78,36 +79,37 @@ void publishConfig(MqttEntity *entity)
                  payload.c_str());
 }
 
-
 void publishConfig()
 {
   publishConfig(&mqttLock);
   publishConfig(&mqttBattery);
+  publishConfig(&mqttBatteryCritical);
 }
 
 void publishLockState(Nuki::NukiBle &nuki)
 {
   Nuki::KeyTurnerState state;
   nukiBle.retrieveKeyTunerState(&state);
-  if(state.lockState == Nuki::LockState::Locked)
+  char buffer[255];
+  snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\"}",
+           state.lockState == Nuki::LockState::Locked ? mqttLock.getStateTopic(), mqttLock.getLockedState() : mqttLock.getUnlockedState(), 
+           nuki.getBatteryPerc(), 
+           nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState() );
+
+  client.publish(mqttLock.getStateTopic(), buffer);
+}
+
+void getConfig()
+{
+  Nuki::Config config;
+  if (nukiBle.requestConfig(&config) == 1)
   {
-    client.publish(mqttLock.getStateTopic(), mqttLock.getLockedState());
+    log_d("Name: %s", config.name);
   }
   else
   {
-    client.publish(mqttLock.getStateTopic(), mqttLock.getUnlockedState());
-  }
-  
-}
-
-void getConfig() {
-  Nuki::Config config;
-  if (nukiBle.requestConfig(&config) == 1) {
-    log_d("Name: %s", config.name);
-  } else {
     log_w("getConfig failed");
   }
-
 }
 
 void connectToMqtt()
@@ -143,7 +145,6 @@ void connectToWifi()
 
 bool newCommandAvailable = false;
 Nuki::LockAction newCommand = Nuki::LockAction::Lock;
-
 
 bool notified = false;
 class Handler : public Nuki::SmartlockEventHandler
@@ -206,6 +207,18 @@ void callback(char *topic, byte *payload, unsigned int length)
 }
 void setup()
 {
+  mqttLock.setValueTemplate("{{value_json.state}}");
+
+  // we use the state of the lock to publish battery information
+  mqttBattery.setCustomStateTopic(mqttLock.getStateTopic());
+  mqttBattery.setValueTemplate("{{value_json.battery}}");
+  mqttBattery.setUnit("%");
+  mqttBattery.setDeviceClass("battery");
+
+  mqttBatteryCritical.setCustomStateTopic(mqttLock.getStateTopic());
+  mqttBatteryCritical.setValueTemplate("{{value_json.battery_critical}}");
+  mqttBatteryCritical.setDeviceClass("battery");
+
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);
   Serial.begin(115200);
@@ -215,8 +228,8 @@ void setup()
   WiFi.begin(wifi_ssid, wifi_pass);
 
   connectToWifi();
-    ArduinoOTA.onStart([]()
-                       {
+  ArduinoOTA.onStart([]()
+                     {
     String type;
     if (ArduinoOTA.getCommand() == U_FLASH) {
       type = "sketch";
@@ -226,12 +239,12 @@ void setup()
 
     // NOTE: if updating FS this would be the place to unmount FS using FS.end()
     Serial.println("Start updating " + type); });
-    ArduinoOTA.onEnd([]()
-                     { Serial.println("\nEnd"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
-    ArduinoOTA.onError([](ota_error_t error)
-                       {
+  ArduinoOTA.onEnd([]()
+                   { Serial.println("\nEnd"); });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                        { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+  ArduinoOTA.onError([](ota_error_t error)
+                     {
     Serial.printf("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) {
       Serial.println("Auth Failed");
@@ -244,7 +257,7 @@ void setup()
     } else if (error == OTA_END_ERROR) {
       Serial.println("End Failed");
     } });
-    ArduinoOTA.begin();
+  ArduinoOTA.begin();
 
   Serial.println();
   Serial.print("Connected to SSID: ");
@@ -297,12 +310,12 @@ void loop()
     }
   }
 
-  if(newCommandAvailable)
+  if (newCommandAvailable)
   {
     Nuki::LockAction action = newCommand;
     newCommandAvailable = false;
     // TODO: use proper nonce
-    if(nukiBle.lockAction(action, deviceId, 0, NULL, 0) == Nuki::CmdResult::Success)
+    if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) == Nuki::CmdResult::Success)
     {
       // dirty hack to force an update
       sleep(8);

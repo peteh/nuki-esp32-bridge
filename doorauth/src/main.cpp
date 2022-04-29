@@ -134,6 +134,7 @@ void connectToMqtt()
 void connectToWifi()
 {
   Serial.print("Connecting to wifi...");
+  WiFi.begin(wifi_ssid, wifi_pass);
   // TODO: really forever? What if we want to go back to autoconnect?
   while (WiFi.status() != WL_CONNECTED)
   {

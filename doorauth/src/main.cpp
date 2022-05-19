@@ -4,6 +4,7 @@
  */
 
 #include <Arduino.h>
+#include <BleScanner.h>
 #include <NukiBle.h>
 #include <NukiConstants.h>
 
@@ -20,7 +21,7 @@
 uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
 Nuki::NukiBle nukiBle(deviceName, deviceId);
-BleScanner scanner;
+BleScanner::Scanner scanner;
 Nuki::KeyTurnerState retrievedKeyTurnerState;
 Nuki::BatteryReport _batteryReport;
 std::list<Nuki::LogEntry> requestedLogEntries;
@@ -92,9 +93,9 @@ void publishLockState(Nuki::NukiBle &nuki)
   nukiBle.retrieveKeyTunerState(&state);
   char buffer[255];
   snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\"}",
-           state.lockState == Nuki::LockState::Locked ? mqttLock.getStateTopic(), mqttLock.getLockedState() : mqttLock.getUnlockedState(), 
-           nuki.getBatteryPerc(), 
-           nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState() );
+           state.lockState == Nuki::LockState::Locked ? mqttLock.getStateTopic(), mqttLock.getLockedState() : mqttLock.getUnlockedState(),
+           nuki.getBatteryPerc(),
+           nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState());
 
   client.publish(mqttLock.getStateTopic(), buffer);
 }
@@ -117,10 +118,10 @@ void connectToMqtt()
   Serial.print("\nconnecting to MQTT...");
   // TODO: add security settings back to mqtt
   // while (!client.connect(mqtt_client, mqtt_user, mqtt_pass))
-  while (!client.connect(composeClientID().c_str()))
+  for (int i = 0; i < 3 && !client.connect(composeClientID().c_str()); i++)
   {
     Serial.print(".");
-    delay(4000);
+    delay(3000);
   }
 
   client.subscribe(mqttLock.getCommandTopic(), 1);
@@ -240,10 +241,13 @@ void setup()
 
     // NOTE: if updating FS this would be the place to unmount FS using FS.end()
     Serial.println("Start updating " + type); });
+
   ArduinoOTA.onEnd([]()
                    { Serial.println("\nEnd"); });
+
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
                         { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+
   ArduinoOTA.onError([](ota_error_t error)
                      {
     Serial.printf("Error[%u]: ", error);
@@ -258,6 +262,7 @@ void setup()
     } else if (error == OTA_END_ERROR) {
       Serial.println("End Failed");
     } });
+
   ArduinoOTA.begin();
 
   Serial.println();
@@ -291,10 +296,13 @@ void loop()
 {
   if (WiFi.status() != WL_CONNECTED)
   {
-    connectToWifi();
+    log_w("WiFi not connected, trying to reconnect, state: %d", WiFi.status());
+    WiFi.reconnect();
   }
+
   if (!client.connected())
   {
+    log_w("Mqtt not connected, trying to reconnect");
     connectToMqtt();
   }
   client.loop();

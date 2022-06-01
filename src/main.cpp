@@ -212,7 +212,7 @@ void callback(char *topic, byte *payload, unsigned int length)
 void setup()
 {
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
+  digitalWrite(LED_BUILTIN, LOW); // on
   Serial.begin(115200);
 
   mqttLock.setValueTemplate("{{value_json.state}}");
@@ -283,6 +283,7 @@ void setup()
   if (nukiBle.isPairedWithLock())
   {
     log_d("paired");
+    digitalWrite(LED_BUILTIN, HIGH); // off
     nukiBle.setEventHandler(&handler);
     getConfig();
     nukiBle.enableLedFlash(false);
@@ -310,9 +311,9 @@ void loop()
   scanner.update();
   if (!nukiBle.isPairedWithLock())
   {
-    digitalWrite(LED_BUILTIN, LOW);
     if (nukiBle.pairNuki() == Nuki::PairingResult::Success)
     {
+      digitalWrite(LED_BUILTIN, HIGH); // off
       log_d("paired");
       nukiBle.setEventHandler(&handler);
       getConfig();

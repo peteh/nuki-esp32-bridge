@@ -215,7 +215,6 @@ void setup()
   digitalWrite(LED_BUILTIN, HIGH);
   Serial.begin(115200);
 
-
   mqttLock.setValueTemplate("{{value_json.state}}");
 
   // we use the state of the lock to publish battery information
@@ -227,8 +226,6 @@ void setup()
   mqttBatteryCritical.setCustomStateTopic(mqttLock.getStateTopic());
   mqttBatteryCritical.setValueTemplate("{{value_json.battery_critical}}");
   mqttBatteryCritical.setDeviceClass("battery");
-
-
 
   WiFi.mode(WIFI_STA);
   WiFi.hostname(composeClientID().c_str());
@@ -326,7 +323,6 @@ void loop()
   {
     Nuki::LockAction action = newCommand;
     newCommandAvailable = false;
-    // TODO: use proper nonce
     if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) == Nuki::CmdResult::Success)
     {
       // dirty hack to force an update

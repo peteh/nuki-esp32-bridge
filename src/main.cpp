@@ -332,7 +332,8 @@ void loop()
     }
   }
 
-  if (notified || millis() - last_update > 60000)
+  // TODO verify impact of regular updating the lock on battery life
+  if (notified) // || millis() - last_update > 60000)
   {
     if (getKeyTurnerStateFromLock())
     {

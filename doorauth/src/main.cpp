@@ -115,7 +115,7 @@ void getConfig()
 
 void connectToMqtt()
 {
-  Serial.print("\nconnecting to MQTT...");
+  log_i("connecting to MQTT...");
   // TODO: add security settings back to mqtt
   // while (!client.connect(mqtt_client, mqtt_user, mqtt_pass))
   for (int i = 0; i < 3 && !client.connect(composeClientID().c_str()); i++)
@@ -134,7 +134,7 @@ void connectToMqtt()
 
 void connectToWifi()
 {
-  Serial.print("Connecting to wifi...");
+  log_i("Connecting to wifi...");
   WiFi.begin(wifi_ssid, wifi_pass);
   // TODO: really forever? What if we want to go back to autoconnect?
   while (WiFi.status() != WL_CONNECTED)
@@ -142,7 +142,7 @@ void connectToWifi()
     Serial.print(".");
     delay(1000);
   }
-  Serial.println("\n Wifi connected!");
+  log_i("\n Wifi connected!");
 }
 
 bool newCommandAvailable = false;
@@ -166,35 +166,37 @@ Handler handler;
 
 void callback(char *topic, byte *payload, unsigned int length)
 {
-  Serial.print("Message arrived [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (unsigned int i = 0; i < length; i++)
-  {
-    Serial.print((char)payload[i]);
-  }
-  Serial.println();
-  // TODO length check
-
+  log_d("Mqtt msg arrived [%s]", topic);
   if (strcmp(topic, mqttLock.getCommandTopic()) == 0)
   {
     if (strncmp((char *)payload, mqttLock.getLockCommand(), length) == 0)
     {
+      log_d("New Mqtt Command: Lock");
       newCommand = Nuki::LockAction::Lock;
       newCommandAvailable = true;
     }
     else if (strncmp((char *)payload, mqttLock.getUnlockCommand(), length) == 0)
     {
+      log_d("New Mqtt Command: Unlock");
       newCommand = Nuki::LockAction::Unlock;
       newCommandAvailable = true;
     }
     else if (strncmp((char *)payload, mqttLock.getOpenCommand(), length) == 0)
     {
+      log_d("New Mqtt Command: Open");
       newCommand = Nuki::LockAction::Unlatch;
       newCommandAvailable = true;
     }
-
-    // TODO: error unknown command
+    else
+    {
+      log_e("Unknown Mqtt command:");
+      for (unsigned int i = 0; i < length; i++)
+      {
+        // TODO: eliminate this somehow
+        Serial.print((char)payload[i]);
+      }
+      Serial.println();
+    }
   }
 
   // publish config when homeassistant comes online and needs the configuration again
@@ -209,6 +211,11 @@ void callback(char *topic, byte *payload, unsigned int length)
 }
 void setup()
 {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+  Serial.begin(115200);
+
+
   mqttLock.setValueTemplate("{{value_json.state}}");
 
   // we use the state of the lock to publish battery information
@@ -221,12 +228,11 @@ void setup()
   mqttBatteryCritical.setValueTemplate("{{value_json.battery_critical}}");
   mqttBatteryCritical.setDeviceClass("battery");
 
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
-  Serial.begin(115200);
+
 
   WiFi.mode(WIFI_STA);
   WiFi.hostname(composeClientID().c_str());
+  WiFi.setAutoConnect(true);
   WiFi.begin(wifi_ssid, wifi_pass);
 
   connectToWifi();
@@ -240,36 +246,33 @@ void setup()
     }
 
     // NOTE: if updating FS this would be the place to unmount FS using FS.end()
-    Serial.println("Start updating " + type); });
+    log_i("Start updating %s", type); });
 
   ArduinoOTA.onEnd([]()
-                   { Serial.println("\nEnd"); });
+                   { log_i("End Update"); });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
                         { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
 
   ArduinoOTA.onError([](ota_error_t error)
                      {
-    Serial.printf("Error[%u]: ", error);
+    log_e("Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) {
-      Serial.println("Auth Failed");
+      log_e("Arduino OTA: Auth Failed");
     } else if (error == OTA_BEGIN_ERROR) {
-      Serial.println("Begin Failed");
+      log_e("Arduino OTA: Begin Failed");
     } else if (error == OTA_CONNECT_ERROR) {
-      Serial.println("Connect Failed");
+      log_e("Arduino OTA: Connect Failed");
     } else if (error == OTA_RECEIVE_ERROR) {
-      Serial.println("Receive Failed");
+      log_e("Arduino OTA: Receive Failed");
     } else if (error == OTA_END_ERROR) {
-      Serial.println("End Failed");
+      log_e("Arduino OTA: End Failed");
     } });
 
   ArduinoOTA.begin();
 
-  Serial.println();
-  Serial.print("Connected to SSID: ");
-  Serial.println(wifi_ssid);
-  Serial.print("IP address: ");
-  Serial.println(WiFi.localIP());
+  log_i("Connected to SSID: %s", wifi_ssid);
+  log_i("IP address: %s", WiFi.localIP());
 
   client.setBufferSize(512);
   client.setServer(mqtt_server, mqtt_port);

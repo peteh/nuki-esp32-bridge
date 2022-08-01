@@ -318,6 +318,8 @@ void loop()
       log_d("paired");
       nukiBle.setEventHandler(&handler);
       getConfig();
+      // force first state update
+      notified = true;
     }
   }
 
@@ -325,11 +327,9 @@ void loop()
   {
     NukiLock::LockAction action = newCommand;
     newCommandAvailable = false;
-    if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) == Nuki::CmdResult::Success)
+    if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success)
     {
-      // dirty hack to force an update
-      sleep(8);
-      notified = true;
+      log_e("Failed to send lock command to lock action: 0x%x", newCommand);
     }
   }
 

@@ -4,9 +4,9 @@
  */
 
 #include <Arduino.h>
-#include <BleScanner.h>
-#include <NukiBle.h>
-#include <NukiConstants.h>
+#include "NukiLock.h"
+#include "NukiConstants.h"
+#include "BleScanner.h"
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -20,14 +20,14 @@
 
 uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
-Nuki::NukiBle nukiBle(deviceName, deviceId);
+NukiLock::NukiLock nukiBle(deviceName, deviceId);
 BleScanner::Scanner scanner;
-Nuki::KeyTurnerState retrievedKeyTurnerState;
-Nuki::BatteryReport _batteryReport;
-std::list<Nuki::LogEntry> requestedLogEntries;
-std::list<Nuki::KeypadEntry> requestedKeypadEntries;
-std::list<Nuki::AuthorizationEntry> requestedAuthorizationEntries;
-std::list<Nuki::TimeControlEntry> requestedTimeControlEntries;
+NukiLock::KeyTurnerState retrievedKeyTurnerState;
+NukiLock::BatteryReport _batteryReport;
+std::list<NukiLock::LogEntry> requestedLogEntries;
+std::list<NukiLock::KeypadEntry> requestedKeypadEntries;
+std::list<NukiLock::AuthorizationEntry> requestedAuthorizationEntries;
+std::list<NukiLock::TimeControlEntry> requestedTimeControlEntries;
 
 WiFiClient net;
 PubSubClient client(net);
@@ -41,8 +41,8 @@ MqttBinarySensor mqttBatteryCritical(&mqttDevice, "battery_critical", "Nuki Batt
 
 void batteryReport()
 {
-  uint8_t result = nukiBle.requestBatteryReport(&_batteryReport);
-  if (result == 1)
+  Nuki::CmdResult result = nukiBle.requestBatteryReport(&_batteryReport);
+  if (result == Nuki::CmdResult::Success)
   {
     log_d("Bat report voltage: %d Crit state: %d, start temp: %d", _batteryReport.batteryVoltage, _batteryReport.criticalBatteryState, _batteryReport.startTemperature);
   }
@@ -54,8 +54,8 @@ void batteryReport()
 
 bool getKeyTurnerStateFromLock()
 {
-  uint8_t result = nukiBle.requestKeyTurnerState(&retrievedKeyTurnerState);
-  if (result == 1)
+  Nuki::CmdResult result = nukiBle.requestKeyTurnerState(&retrievedKeyTurnerState);
+  if (result ==  Nuki::CmdResult::Success)
   {
     log_d("Bat crit: %d, Bat perc:%d lock state: %d %d:%d:%d",
           nukiBle.isBatteryCritical(), nukiBle.getBatteryPerc(), retrievedKeyTurnerState.lockState, retrievedKeyTurnerState.currentTimeHour,
@@ -87,13 +87,13 @@ void publishConfig()
   publishConfig(&mqttBatteryCritical);
 }
 
-void publishLockState(Nuki::NukiBle &nuki)
+void publishLockState(NukiLock::NukiLock &nuki)
 {
-  Nuki::KeyTurnerState state;
+  NukiLock::KeyTurnerState state;
   nukiBle.retrieveKeyTunerState(&state);
   char buffer[255];
   snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\"}",
-           state.lockState == Nuki::LockState::Locked ? mqttLock.getStateTopic(), mqttLock.getLockedState() : mqttLock.getUnlockedState(),
+           state.lockState == NukiLock::LockState::Locked ? mqttLock.getStateTopic(), mqttLock.getLockedState() : mqttLock.getUnlockedState(),
            nuki.getBatteryPerc(),
            nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState());
 
@@ -102,8 +102,8 @@ void publishLockState(Nuki::NukiBle &nuki)
 
 void getConfig()
 {
-  Nuki::Config config;
-  if (nukiBle.requestConfig(&config) == 1)
+  NukiLock::Config config;
+  if (nukiBle.requestConfig(&config) == Nuki::CmdResult::Success)
   {
     log_d("Name: %s", config.name);
   }
@@ -146,7 +146,7 @@ void connectToWifi()
 }
 
 bool newCommandAvailable = false;
-Nuki::LockAction newCommand = Nuki::LockAction::Lock;
+NukiLock::LockAction newCommand = NukiLock::LockAction::Lock;
 
 bool notified = false;
 class Handler : public Nuki::SmartlockEventHandler
@@ -172,19 +172,19 @@ void callback(char *topic, byte *payload, unsigned int length)
     if (strncmp((char *)payload, mqttLock.getLockCommand(), length) == 0)
     {
       log_d("New Mqtt Command: Lock");
-      newCommand = Nuki::LockAction::Lock;
+      newCommand = NukiLock::LockAction::Lock;
       newCommandAvailable = true;
     }
     else if (strncmp((char *)payload, mqttLock.getUnlockCommand(), length) == 0)
     {
       log_d("New Mqtt Command: Unlock");
-      newCommand = Nuki::LockAction::Unlock;
+      newCommand = NukiLock::LockAction::Unlock;
       newCommandAvailable = true;
     }
     else if (strncmp((char *)payload, mqttLock.getOpenCommand(), length) == 0)
     {
       log_d("New Mqtt Command: Open");
-      newCommand = Nuki::LockAction::Unlatch;
+      newCommand = NukiLock::LockAction::Unlatch;
       newCommandAvailable = true;
     }
     else
@@ -322,13 +322,13 @@ void loop()
 
   if (newCommandAvailable)
   {
-    Nuki::LockAction action = newCommand;
+    NukiLock::LockAction action = newCommand;
     newCommandAvailable = false;
     if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) == Nuki::CmdResult::Success)
     {
       // dirty hack to force an update
-      sleep(8);
-      notified = true;
+      //sleep(8);
+      //notified = true;
     }
   }
 

@@ -18,6 +18,7 @@
 #include "utils.h"
 #include "config.h"
 
+
 uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
 NukiLock::NukiLock nukiBle(deviceName, deviceId);
@@ -153,7 +154,7 @@ class Handler : public Nuki::SmartlockEventHandler
 {
 public:
   virtual ~Handler(){};
-  void notify(Nuki::EventType eventType)
+  void notify(NukiLock::EventType eventType)
   {
     if (eventType == Nuki::EventType::KeyTurnerStatusUpdated)
     {
@@ -317,6 +318,8 @@ void loop()
       log_d("paired");
       nukiBle.setEventHandler(&handler);
       getConfig();
+      // force first state update
+      notified = true;
     }
   }
 
@@ -324,11 +327,9 @@ void loop()
   {
     NukiLock::LockAction action = newCommand;
     newCommandAvailable = false;
-    if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) == Nuki::CmdResult::Success)
+    if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success)
     {
-      // dirty hack to force an update
-      //sleep(8);
-      //notified = true;
+      log_e("Failed to send lock command to lock action: 0x%x", newCommand);
     }
   }
 

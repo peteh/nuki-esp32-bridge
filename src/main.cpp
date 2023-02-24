@@ -94,7 +94,7 @@ void publishLockState(NukiLock::NukiLock &nuki)
   nukiBle.retrieveKeyTunerState(&state);
   char buffer[255];
   snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\"}",
-           state.lockState == NukiLock::LockState::Locked ? mqttLock.getStateTopic(), mqttLock.getLockedState() : mqttLock.getUnlockedState(),
+           state.lockState == NukiLock::LockState::Locked ? mqttLock.getLockedState() : mqttLock.getUnlockedState(),
            nuki.getBatteryPerc(),
            nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState());
 

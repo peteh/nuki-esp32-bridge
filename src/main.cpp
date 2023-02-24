@@ -4,9 +4,9 @@
  */
 
 #include <Arduino.h>
-#include "NukiLock.h"
-#include "NukiConstants.h"
-#include "BleScanner.h"
+#include <NukiLock.h>
+#include <NukiConstants.h>
+#include <BleScanner.h>
 
 #include <WiFi.h>
 #include <WiFiUdp.h>

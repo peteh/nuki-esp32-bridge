@@ -8,6 +8,9 @@
 #include <NukiConstants.h>
 #include <BleScanner.h>
 
+#include <esp_task_wdt.h>
+
+
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <PubSubClient.h>
@@ -18,6 +21,7 @@
 #include "utils.h"
 #include "config.h"
 
+const uint WATCHDOG_TIMEOUT_S = 30;
 
 uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
@@ -39,6 +43,7 @@ MqttLock mqttLock(&mqttDevice, "lock", "Nuki");
 
 MqttSensor mqttBattery(&mqttDevice, "battery", "Nuki Battery");
 MqttBinarySensor mqttBatteryCritical(&mqttDevice, "battery_critical", "Nuki Battery Critical");
+
 
 void batteryReport()
 {
@@ -210,11 +215,14 @@ void callback(char *topic, byte *payload, unsigned int length)
     }
   }
 }
+
 void setup()
 {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW); // on
   Serial.begin(115200);
+  esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true); //enable panic so ESP32 restarts
+  esp_task_wdt_add(NULL); //add current thread to WDT watch
 
   mqttLock.setValueTemplate("{{value_json.state}}");
 
@@ -296,6 +304,9 @@ unsigned long last_update = 0;
 
 void loop()
 {
+  // reset watchdog, important to be called once each loop.
+  esp_task_wdt_reset();
+
   if (WiFi.status() != WL_CONNECTED)
   {
     log_w("WiFi not connected, trying to reconnect, state: %d", WiFi.status());
@@ -327,9 +338,10 @@ void loop()
   {
     NukiLock::LockAction action = newCommand;
     newCommandAvailable = false;
-    if (nukiBle.lockAction(action, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success)
+    for(int i = 0; i < 3 && nukiBle.lockAction(action, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success; i++)
     {
       log_e("Failed to send lock command to lock action: 0x%x", newCommand);
+      sleep(2);
     }
   }
 

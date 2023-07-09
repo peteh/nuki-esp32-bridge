@@ -17,6 +17,7 @@
 #include <ArduinoOTA.h>
 
 #include <MqttDevice.h>
+#include <Preferences.h>
 
 #include "utils.h"
 #include "config.h"
@@ -34,6 +35,8 @@ std::list<NukiLock::KeypadEntry> requestedKeypadEntries;
 std::list<NukiLock::AuthorizationEntry> requestedAuthorizationEntries;
 std::list<NukiLock::TimeControlEntry> requestedTimeControlEntries;
 
+uint32_t restartCounter = 0;
+
 WiFiClient net;
 PubSubClient client(net);
 const char *HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status";
@@ -43,7 +46,9 @@ MqttLock mqttLock(&mqttDevice, "lock", "Nuki");
 
 MqttSensor mqttBattery(&mqttDevice, "battery", "Nuki Battery");
 MqttBinarySensor mqttBatteryCritical(&mqttDevice, "battery_critical", "Nuki Battery Critical");
+MqttSensor mqttRestartCounter(&mqttDevice, "nuki_restart_counter", "Nuki Bridge Restart Counter");
 
+Preferences preferences;
 
 void batteryReport()
 {
@@ -91,6 +96,7 @@ void publishConfig()
   publishConfig(&mqttLock);
   publishConfig(&mqttBattery);
   publishConfig(&mqttBatteryCritical);
+  publishConfig(&mqttRestartCounter);
 }
 
 void publishLockState(NukiLock::NukiLock &nuki)
@@ -98,10 +104,11 @@ void publishLockState(NukiLock::NukiLock &nuki)
   NukiLock::KeyTurnerState state;
   nukiBle.retrieveKeyTunerState(&state);
   char buffer[255];
-  snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\"}",
+  snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\", \"restart_counter\": %u}",
            state.lockState == NukiLock::LockState::Locked ? mqttLock.getLockedState() : mqttLock.getUnlockedState(),
            nuki.getBatteryPerc(),
-           nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState());
+           nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState(),
+           restartCounter);
 
   client.publish(mqttLock.getStateTopic(), buffer);
 }
@@ -224,6 +231,13 @@ void setup()
   esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true); //enable panic so ESP32 restarts
   esp_task_wdt_add(NULL); //add current thread to WDT watch
 
+  preferences.begin("settings", false);
+  restartCounter = preferences.getInt("restartCount", 0);
+  log_i("Restart count: %d\n", restartCounter);
+  restartCounter++;
+  preferences.putInt("restartCount", restartCounter);
+  preferences.end();
+
   mqttLock.setValueTemplate("{{value_json.state}}");
 
   // we use the state of the lock to publish battery information
@@ -236,8 +250,13 @@ void setup()
   mqttBatteryCritical.setValueTemplate("{{value_json.battery_critical}}");
   mqttBatteryCritical.setDeviceClass("battery");
 
+  mqttRestartCounter.setCustomStateTopic(mqttLock.getStateTopic());
+  mqttRestartCounter.setValueTemplate("{{value_json.restart_counter}}");
+  mqttRestartCounter.setStateClass(MqttSensor::StateClass::TOTAL_INCREASING);
+  mqttRestartCounter.setEntityType(EntityCategory::DIAGNOSTIC);
+
+  WiFi.setHostname(composeClientID().c_str());
   WiFi.mode(WIFI_STA);
-  WiFi.hostname(composeClientID().c_str());
   WiFi.setAutoConnect(true);
   WiFi.begin(wifi_ssid, wifi_pass);
 

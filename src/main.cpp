@@ -14,10 +14,13 @@
 #include <WiFiUdp.h>
 #include <PubSubClient.h>
 #include <ArduinoOTA.h>
+#include <LittleFS.h>
 
 #include <MqttDevice.h>
 #include <Preferences.h>
+#include "platform.h"
 #include "mqttview.h"
+#include "configstorage.h"
 #include "utils.h"
 #include "config.h"
 const uint WATCHDOG_TIMEOUT_S = 30;
@@ -27,34 +30,33 @@ uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
 NukiLock::NukiLock nukiBle(deviceName, deviceId);
 BleScanner::Scanner scanner;
-NukiLock::KeyTurnerState retrievedKeyTurnerState;
-NukiLock::BatteryReport _batteryReport;
-std::list<NukiLock::LogEntry> requestedLogEntries;
-std::list<NukiLock::KeypadEntry> requestedKeypadEntries;
-std::list<NukiLock::AuthorizationEntry> requestedAuthorizationEntries;
-std::list<NukiLock::TimeControlEntry> requestedTimeControlEntries;
+NukiLock::KeyTurnerState g_retrievedKeyTurnerState;
 
-uint32_t restartCounter = 0;
+Config g_config = {0, 0, 0, "", "", "", 1883};
 
 WiFiClient net;
-PubSubClient client(net);
-MqttView g_mqttView(&client);
+PubSubClient g_client(net);
+MqttView g_mqttView(&g_client);
 const char *HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status";
 const char *HOMEASSISTANT_STATUS_TOPIC_ALT = "ha/status";
-MqttDevice mqttDevice(composeClientID().c_str(), "Nuki", "Nuki ESP32 Bridge", "maker_pt");
-
 Preferences preferences;
 
-NukiLock::KeyTurnerState g_state;
+bool g_newCommandAvailable = false;
+NukiLock::LockAction g_newCommand = NukiLock::LockAction::Lock;
+
+bool g_keyTurnerUpdateNotification = false;
+
+bool g_wifiConnected = false;
+bool g_mqttConnected = false;
 
 bool getKeyTurnerStateFromLock()
 {
-  Nuki::CmdResult result = nukiBle.requestKeyTurnerState(&retrievedKeyTurnerState);
+  Nuki::CmdResult result = nukiBle.requestKeyTurnerState(&g_retrievedKeyTurnerState);
   if (result == Nuki::CmdResult::Success)
   {
     log_d("Bat crit: %d, Bat perc:%d lock state: %d %d:%d:%d",
-          nukiBle.isBatteryCritical(), nukiBle.getBatteryPerc(), retrievedKeyTurnerState.lockState, retrievedKeyTurnerState.currentTimeHour,
-          retrievedKeyTurnerState.currentTimeMinute, retrievedKeyTurnerState.currentTimeSecond);
+          nukiBle.isBatteryCritical(), nukiBle.getBatteryPerc(), g_retrievedKeyTurnerState.lockState, g_retrievedKeyTurnerState.currentTimeHour,
+          g_retrievedKeyTurnerState.currentTimeMinute, g_retrievedKeyTurnerState.currentTimeSecond);
   }
   else
   {
@@ -63,17 +65,19 @@ bool getKeyTurnerStateFromLock()
   return result;
 }
 
-void publishConfig(MqttEntity *entity)
+class NukiNotificationHandler : public Nuki::SmartlockEventHandler
 {
-  String payload = entity->getHomeAssistantConfigPayload();
-  char topic[255];
-  entity->getHomeAssistantConfigTopic(topic, sizeof(topic));
-  client.publish(topic, payload.c_str());
-
-  entity->getHomeAssistantConfigTopicAlt(topic, sizeof(topic));
-  client.publish(topic,
-                 payload.c_str());
-}
+public:
+  virtual ~NukiNotificationHandler(){};
+  void notify(NukiLock::EventType eventType)
+  {
+    if (eventType == Nuki::EventType::KeyTurnerStatusUpdated)
+    {
+      g_keyTurnerUpdateNotification = true;
+    }
+  }
+};
+NukiNotificationHandler g_nukiNotificationHandler;
 
 void getConfig()
 {
@@ -88,56 +92,48 @@ void getConfig()
   }
 }
 
-void connectToMqtt()
+bool connectToMqtt()
 {
-  log_i("connecting to MQTT...");
-  // TODO: add security settings back to mqtt
-  // while (!client.connect(mqtt_client, mqtt_user, mqtt_pass))
-  for (int i = 0; i < 3 && !client.connect(composeClientID().c_str()); i++)
+  if (g_client.connected())
   {
-    Serial.print(".");
-    delay(3000);
+    return true;
   }
 
-  client.subscribe(g_mqttView.getLock().getCommandTopic(), 1);
-
-  client.subscribe(HOMEASSISTANT_STATUS_TOPIC);
-  client.subscribe(HOMEASSISTANT_STATUS_TOPIC_ALT);
-
-  g_mqttView.publishConfig();
-}
-
-void connectToWifi()
-{
-  log_i("Connecting to wifi...");
-  WiFi.begin(wifi_ssid, wifi_pass);
-  // TODO: really forever? What if we want to go back to autoconnect?
-  while (WiFi.status() != WL_CONNECTED)
+  log_i("Connecting to MQTT...");
+  if (strlen(mqtt_user) == 0)
   {
-    Serial.print(".");
-    delay(1000);
-  }
-  log_i("\n Wifi connected!");
-}
-
-bool newCommandAvailable = false;
-NukiLock::LockAction newCommand = NukiLock::LockAction::Lock;
-
-bool keyTurnerUpdateNotification = false;
-class Handler : public Nuki::SmartlockEventHandler
-{
-public:
-  virtual ~Handler(){};
-  void notify(NukiLock::EventType eventType)
-  {
-    if (eventType == Nuki::EventType::KeyTurnerStatusUpdated)
+    if (!g_client.connect(composeClientID().c_str()))
     {
-      keyTurnerUpdateNotification = true;
+      return false;
     }
   }
-};
+  else
+  {
+    if (!g_client.connect(composeClientID().c_str(), mqtt_user, mqtt_pass))
+    {
+      return false;
+    }
+  }
 
-Handler handler;
+  g_client.subscribe(g_mqttView.getLock().getCommandTopic(), 1);
+  g_client.subscribe(g_mqttView.getDiagnosticsResetButton().getCommandTopic(), 1);
+
+  g_client.subscribe(HOMEASSISTANT_STATUS_TOPIC);
+  g_client.subscribe(HOMEASSISTANT_STATUS_TOPIC_ALT);
+
+  g_mqttView.publishConfig();
+
+  // force an update of the state
+  g_keyTurnerUpdateNotification = true;
+
+  return true;
+}
+
+bool connectToWifi()
+{
+  return WiFi.status() == WL_CONNECTED;
+}
+
 
 void callback(char *topic, byte *payload, unsigned int length)
 {
@@ -147,20 +143,20 @@ void callback(char *topic, byte *payload, unsigned int length)
     if (strncmp((char *)payload, g_mqttView.getLock().getLockCommand(), length) == 0)
     {
       log_d("New Mqtt Command: Lock");
-      newCommand = NukiLock::LockAction::Lock;
-      newCommandAvailable = true;
+      g_newCommand = NukiLock::LockAction::Lock;
+      g_newCommandAvailable = true;
     }
     else if (strncmp((char *)payload, g_mqttView.getLock().getUnlockCommand(), length) == 0)
     {
       log_d("New Mqtt Command: Unlock");
-      newCommand = NukiLock::LockAction::Unlock;
-      newCommandAvailable = true;
+      g_newCommand = NukiLock::LockAction::Unlock;
+      g_newCommandAvailable = true;
     }
     else if (strncmp((char *)payload, g_mqttView.getLock().getOpenCommand(), length) == 0)
     {
       log_d("New Mqtt Command: Open");
-      newCommand = NukiLock::LockAction::Unlatch;
-      newCommandAvailable = true;
+      g_newCommand = NukiLock::LockAction::Unlatch;
+      g_newCommandAvailable = true;
     }
     else
     {
@@ -173,6 +169,16 @@ void callback(char *topic, byte *payload, unsigned int length)
       Serial.println();
     }
   }
+  else if (strcmp(topic, g_mqttView.getDiagnosticsResetButton().getCommandTopic()) == 0)
+    {
+        bool pressed = strncmp((char *)payload, g_mqttView.getDiagnosticsResetButton().getPressState(), length) == 0;
+        g_config.restartCounter = 0;
+        g_config.mqttDisconnectCounter = 0;
+        g_config.wifiDisconnectCounter = 0;
+        saveSettings(g_config);
+        g_mqttView.publishLockState(nukiBle, g_config);
+    }
+
 
   // publish config when homeassistant comes online and needs the configuration again
   else if (strcmp(topic, HOMEASSISTANT_STATUS_TOPIC) == 0 ||
@@ -182,7 +188,8 @@ void callback(char *topic, byte *payload, unsigned int length)
     {
       g_mqttView.publishConfig();
       delay(100);
-      g_mqttView.publishLockState(nukiBle, restartCounter);
+      // force state update
+      g_keyTurnerUpdateNotification = true;
     }
   }
 }
@@ -195,12 +202,22 @@ void setup()
   esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true); // enable panic so ESP32 restarts
   esp_task_wdt_add(NULL);                      // add current thread to WDT watch
 
-  preferences.begin("settings", false);
-  restartCounter = preferences.getInt("restartCount", 0);
-  log_i("Restart count: %d\n", restartCounter);
-  restartCounter++;
-  preferences.putInt("restartCount", restartCounter);
-  preferences.end();
+    if (!LittleFS.begin())
+    {
+        log_e("Failed to mount file system");
+        delay(5000);
+        if (!formatLittleFS())
+        {
+            log_e("Failed to format file system - hardware issues!");
+            for (;;)
+            {
+                delay(100);
+            }
+        }
+    }
+    loadSettings(g_config);
+    g_config.restartCounter++;
+    saveSettings(g_config);
 
   WiFi.setHostname(composeClientID().c_str());
   WiFi.mode(WIFI_STA);
@@ -224,7 +241,10 @@ void setup()
                    { log_i("End Update"); });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-                        { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+                        {
+    // trigger watchdog during update
+    esp_task_wdt_reset();
+    log_i("Progress: %u%%\r", (progress / (total / 100))); });
 
   ArduinoOTA.onError([](ota_error_t error)
                      {
@@ -246,9 +266,9 @@ void setup()
   log_i("Connected to SSID: %s", wifi_ssid);
   log_i("IP address: %s", WiFi.localIP());
 
-  client.setBufferSize(512);
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
+  g_client.setBufferSize(1024);
+  g_client.setServer(mqtt_server, mqtt_port);
+  g_client.setCallback(callback);
 
   log_d("Starting NUKI BLE...");
   scanner.initialize();
@@ -259,7 +279,7 @@ void setup()
   {
     log_d("paired");
     digitalWrite(LED_BUILTIN, HIGH); // off
-    nukiBle.setEventHandler(&handler);
+    nukiBle.setEventHandler(&g_nukiNotificationHandler);
     getConfig();
     nukiBle.enableLedFlash(false);
   }
@@ -267,7 +287,7 @@ void setup()
   // nukiBle.unPairNuki();
 
   // force first update
-  keyTurnerUpdateNotification = true;
+  g_keyTurnerUpdateNotification = true;
 }
 unsigned long last_update = 0;
 
@@ -276,19 +296,38 @@ void loop()
   // reset watchdog, important to be called once each loop.
   esp_task_wdt_reset();
 
-  if (WiFi.status() != WL_CONNECTED)
+  bool wifiConnected = connectToWifi();
+  if (!wifiConnected)
   {
-    log_w("WiFi not connected, trying to reconnect, state: %d", WiFi.status());
-    WiFi.reconnect();
+    if (g_wifiConnected)
+    {
+      // we switched to disconnected
+      g_config.wifiDisconnectCounter++;
+      saveSettings(g_config);
+    }
+    g_wifiConnected = false;
+    g_mqttConnected = false;
+    delay(1000);
+    return;
+  }
+  g_wifiConnected = true;
+  ArduinoOTA.handle();
+
+  bool mqttConnected = connectToMqtt();
+  if (!mqttConnected)
+  {
+    if (g_mqttConnected)
+    {
+      // we switched to disconnected
+      g_config.mqttDisconnectCounter++;
+      saveSettings(g_config);
+    }
+    g_mqttConnected = false;
+    delay(1000);
+    return;
   }
 
-  if (!client.connected())
-  {
-    log_w("Mqtt not connected, trying to reconnect");
-    connectToMqtt();
-  }
-
-  client.loop();
+  g_client.loop();
   ArduinoOTA.handle();
   scanner.update();
   if (!nukiBle.isPairedWithLock())
@@ -297,27 +336,27 @@ void loop()
     {
       digitalWrite(LED_BUILTIN, HIGH); // off
       log_d("paired");
-      nukiBle.setEventHandler(&handler);
+      nukiBle.setEventHandler(&g_nukiNotificationHandler);
       getConfig();
     }
   }
 
-  if (newCommandAvailable)
+  if (g_newCommandAvailable)
   {
-    newCommandAvailable = false;
-    for (int i = 0; i < 3 && nukiBle.lockAction(newCommand, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success; i++)
+    g_newCommandAvailable = false;
+    for (int i = 0; i < 3 && nukiBle.lockAction(g_newCommand, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success; i++)
     {
-      log_e("Failed to send lock command to lock action: 0x%x", newCommand);
+      log_e("Failed to send lock command to lock action: 0x%x", g_newCommand);
       delay(2000);
     }
   }
 
-  if (keyTurnerUpdateNotification)
+  if (g_keyTurnerUpdateNotification)
   {
     if (getKeyTurnerStateFromLock())
     {
-      keyTurnerUpdateNotification = false;
-      g_mqttView.publishLockState(nukiBle, restartCounter);
+      g_keyTurnerUpdateNotification = false;
+      g_mqttView.publishLockState(nukiBle, g_config);
       last_update = millis();
     }
   }

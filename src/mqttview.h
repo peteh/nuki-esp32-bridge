@@ -1,3 +1,4 @@
+#pragma once
 #include <Arduino.h>
 #include <PubSubClient.h>
 #include <MqttDevice.h>
@@ -8,49 +9,54 @@
 
 class MqttView
 {
-    // apartement door:
-    //   doorman-[name]/apartment/bell/state -> on/off
-    //   doorman-[name]/apartment/bell/pattern/state -> on/off
-    // entry door:
-    //   doorman-[name]/entry/bell/state -> on/off
-    //   doorman-[name]/entry/bell/pattern/state -> on/off
-    //   doorman-[name]/entry/opener/cmd
-    //   doorman-[name]/partymode/state -> on/off
-
-    // commands
-    // 0x1100 door opener if the handset is not lifted up
-    // 0x1180 door opener if the handset is lifted up
-
-    // 0x1B8F9A41 own door bell at the flat door
-    // 0x0B8F9A80 own door bell at the main door
-
 public:
     MqttView(PubSubClient *client)
         : m_client(client),
           m_device(composeClientID().c_str(), "Nuki", "Nuki ESP32 Bridge", "maker_pt"),
-          mqttLock(&m_device, "lock", ""),
-          mqttBattery(&m_device, "battery", "Battery"),
-          mqttBatteryCritical(&m_device, "battery_critical", "Battery Critical"),
-          mqttRestartCounter(&m_device, "restart_counter", "Restart Counter")
+          m_lock(&m_device, "lock", ""),
+          m_battery(&m_device, "battery", "Battery"),
+          m_batteryCritical(&m_device, "battery_critical", "Battery Critical"),
+
+          // Diagnostics Elements
+          m_diagnosticsResetButton(&m_device, "diagnostics_reset_btn", "Reset Counters"),
+          m_diagnosticsRestartCounter(&m_device, "diagnostics_restart_counter", "Restart Counter"),
+          m_diagnosticsWifiDisconnectCounter(&m_device, "diagnostics_wifidisconnect_counter", "WiFi Disconnect Counter"),
+          m_diagnosticsMqttDisconnectCounter(&m_device, "diagnostics_mqttdisconnect_counter", "MQTT Disconnect Counter")
     {
         m_device.setSWVersion(VERSION);
 
-        mqttLock.setValueTemplate("{{value_json.state}}");
+        m_lock.setValueTemplate("{{value_json.state}}");
 
         // we use the state of the lock to publish battery information
-        mqttBattery.setCustomStateTopic(mqttLock.getStateTopic());
-        mqttBattery.setValueTemplate("{{value_json.battery}}");
-        mqttBattery.setUnit("%");
-        mqttBattery.setDeviceClass("battery");
+        m_battery.setCustomStateTopic(m_lock.getStateTopic());
+        m_battery.setValueTemplate("{{value_json.battery}}");
+        m_battery.setUnit("%");
+        m_battery.setDeviceClass("battery");
 
-        mqttBatteryCritical.setCustomStateTopic(mqttLock.getStateTopic());
-        mqttBatteryCritical.setValueTemplate("{{value_json.battery_critical}}");
-        mqttBatteryCritical.setDeviceClass("battery");
+        m_batteryCritical.setCustomStateTopic(m_lock.getStateTopic());
+        m_batteryCritical.setValueTemplate("{{value_json.battery_critical}}");
+        m_batteryCritical.setDeviceClass("battery");
 
-        mqttRestartCounter.setCustomStateTopic(mqttLock.getStateTopic());
-        mqttRestartCounter.setValueTemplate("{{value_json.restart_counter}}");
-        mqttRestartCounter.setStateClass(MqttSensor::StateClass::TOTAL);
-        mqttRestartCounter.setEntityType(EntityCategory::DIAGNOSTIC);
+        m_diagnosticsResetButton.setEntityType(EntityCategory::DIAGNOSTIC);
+        m_diagnosticsResetButton.setDeviceClass("restart");
+
+        m_diagnosticsRestartCounter.setCustomStateTopic(m_lock.getStateTopic());
+        m_diagnosticsRestartCounter.setValueTemplate("{{value_json.restart_counter}}");
+        m_diagnosticsRestartCounter.setEntityType(EntityCategory::DIAGNOSTIC);
+        m_diagnosticsRestartCounter.setStateClass(MqttSensor::StateClass::TOTAL);
+        m_diagnosticsRestartCounter.setIcon("mdi:counter");
+
+        m_diagnosticsWifiDisconnectCounter.setCustomStateTopic(m_lock.getStateTopic());
+        m_diagnosticsWifiDisconnectCounter.setValueTemplate("{{value_json.wifi_disconnect_counter}}");
+        m_diagnosticsWifiDisconnectCounter.setEntityType(EntityCategory::DIAGNOSTIC);
+        m_diagnosticsWifiDisconnectCounter.setStateClass(MqttSensor::StateClass::TOTAL);
+        m_diagnosticsWifiDisconnectCounter.setIcon("mdi:counter");
+
+        m_diagnosticsMqttDisconnectCounter.setCustomStateTopic(m_lock.getStateTopic());
+        m_diagnosticsMqttDisconnectCounter.setValueTemplate("{{value_json.mqtt_disconnect_counter}}");
+        m_diagnosticsMqttDisconnectCounter.setEntityType(EntityCategory::DIAGNOSTIC);
+        m_diagnosticsMqttDisconnectCounter.setStateClass(MqttSensor::StateClass::TOTAL);
+        m_diagnosticsMqttDisconnectCounter.setIcon("mdi:counter");
     }
 
     MqttDevice &getDevice()
@@ -60,63 +66,59 @@ public:
 
     const MqttLock &getLock() const
     {
-        return mqttLock;
+        return m_lock;
     }
 
-    void publishOnOffEdgeSwitch(MqttSwitch &entity)
+    const MqttButton &getDiagnosticsResetButton() const
     {
-        publishMqttState(entity, entity.getOnState());
-        delay(1000);
-        publishMqttState(entity, entity.getOffState());
-    }
-
-    void publishOnOffEdgeSiren(MqttSiren &entity)
-    {
-        publishMqttState(entity, entity.getOnState());
-        delay(1000);
-        publishMqttState(entity, entity.getOffState());
-    }
-
-    void publishOnOffEdgeBinary(MqttBinarySensor &entity)
-    {
-        publishMqttState(entity, entity.getOnState());
-        delay(1000);
-        publishMqttState(entity, entity.getOffState());
+        return m_diagnosticsResetButton;
     }
 
     void publishConfig()
     {
-        publishConfig(mqttLock);
-        publishConfig(mqttBattery);
-        publishConfig(mqttBatteryCritical);
-        publishConfig(mqttRestartCounter);
+        publishConfig(m_lock);
+        publishConfig(m_battery);
+        publishConfig(m_batteryCritical);
 
-        delay(1000);
-        // TODO: publish all initial states
+        // diag elements
+        publishConfig(m_diagnosticsResetButton);
+        publishConfig(m_diagnosticsRestartCounter);
+        publishConfig(m_diagnosticsWifiDisconnectCounter);
+        publishConfig(m_diagnosticsMqttDisconnectCounter);
+
     }
 
-    void publishLockState(NukiLock::NukiLock &nuki, uint32_t restartCounter)
+    void publishLockState(NukiLock::NukiLock &nuki, Config& config)
     {
         NukiLock::KeyTurnerState state;
+
+        // only gets the current state in the lock, does not actively query it
         nuki.retrieveKeyTunerState(&state);
         char buffer[255];
-        snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\", \"restart_counter\": %u}",
-                 state.lockState == NukiLock::LockState::Locked ? mqttLock.getLockedState() : mqttLock.getUnlockedState(),
+        snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\", \"wifi_disconnect_counter\": %u, \"mqtt_disconnect_counter\": %u, \"restart_counter\": %u}",
+                 state.lockState == NukiLock::LockState::Locked ? m_lock.getLockedState() : m_lock.getUnlockedState(),
                  nuki.getBatteryPerc(),
-                 nuki.isBatteryCritical() ? mqttBatteryCritical.getOnState() : mqttBatteryCritical.getOffState(),
-                 restartCounter);
+                 nuki.isBatteryCritical() ? m_batteryCritical.getOnState() : m_batteryCritical.getOffState(),
+                 config.wifiDisconnectCounter, 
+                 config.mqttDisconnectCounter, 
+                 config.restartCounter);
 
-        m_client->publish(mqttLock.getStateTopic(), buffer);
+        m_client->publish(m_lock.getStateTopic(), buffer);
     }
 
 private:
     PubSubClient *m_client;
 
     MqttDevice m_device;
-    MqttLock mqttLock;
-    MqttSensor mqttBattery;
-    MqttBinarySensor mqttBatteryCritical;
-    MqttSensor mqttRestartCounter;
+    MqttLock m_lock;
+    MqttSensor m_battery;
+    MqttBinarySensor m_batteryCritical;
+
+    // Diagnostics Elements
+    MqttButton m_diagnosticsResetButton;
+    MqttSensor m_diagnosticsRestartCounter;
+    MqttSensor m_diagnosticsWifiDisconnectCounter;
+    MqttSensor m_diagnosticsMqttDisconnectCounter;
 
     void publishConfig(MqttEntity &entity)
     {
@@ -131,31 +133,6 @@ private:
         if (!m_client->publish(topic, payload.c_str()))
         {
             log_e("Failed to publish config to %s", entity.getStateTopic());
-        }
-    }
-
-    void publishMqttConfigState(MqttEntity &entity, const uint32_t value)
-    {
-        char state[9];
-        snprintf(state, sizeof(state), "%08x", value);
-        if (!m_client->publish(entity.getStateTopic(), state))
-        {
-            log_e("Failed to publish state to %s", entity.getStateTopic());
-        }
-    }
-
-    void publishMqttCounterState(MqttEntity &entity, const uint32_t value)
-    {
-        char state[9];
-        snprintf(state, sizeof(state), "%u", value);
-        m_client->publish(entity.getStateTopic(), state);
-    }
-
-    void publishMqttState(MqttEntity &entity, const char *state)
-    {
-        if (!m_client->publish(entity.getStateTopic(), state))
-        {
-            log_e("Failed to publish state to %s", entity.getStateTopic());
         }
     }
 };

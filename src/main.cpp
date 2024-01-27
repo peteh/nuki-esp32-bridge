@@ -21,7 +21,7 @@
 
 #include "utils.h"
 #include "config.h"
-
+#define VERSION "2024.1.0"
 const uint WATCHDOG_TIMEOUT_S = 30;
 const uint32_t PUBLISH_STATE_S = 10*60;
 
@@ -210,6 +210,8 @@ void callback(char *topic, byte *payload, unsigned int length)
     if (strncmp((char *)payload, "online", length) == 0)
     {
       publishConfig();
+      delay(100);
+      publishLockState(nukiBle);
     }
   }
 }
@@ -229,6 +231,8 @@ void setup()
   preferences.putInt("restartCount", restartCounter);
   preferences.end();
 
+  mqttDevice.setSWVersion(VERSION);
+
   mqttLock.setValueTemplate("{{value_json.state}}");
 
   // we use the state of the lock to publish battery information
@@ -243,7 +247,7 @@ void setup()
 
   mqttRestartCounter.setCustomStateTopic(mqttLock.getStateTopic());
   mqttRestartCounter.setValueTemplate("{{value_json.restart_counter}}");
-  mqttRestartCounter.setStateClass(MqttSensor::StateClass::TOTAL_INCREASING);
+  mqttRestartCounter.setStateClass(MqttSensor::StateClass::TOTAL);
   mqttRestartCounter.setEntityType(EntityCategory::DIAGNOSTIC);
 
   WiFi.setHostname(composeClientID().c_str());
@@ -367,10 +371,10 @@ void loop()
   }
 
   // we regularly send mqtt messages with the last state to make sure we are alive
-  if (millis() - last_update > PUBLISH_STATE_S * 1000)
-  {
-    publishLockState(nukiBle);
-  }
+  //if (millis() - last_update > PUBLISH_STATE_S * 1000)
+  //{
+  //  publishLockState(nukiBle);
+  //}
 
   delay(100);
 }

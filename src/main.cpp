@@ -23,6 +23,7 @@
 #include "config.h"
 
 const uint WATCHDOG_TIMEOUT_S = 30;
+const uint32_t PUBLISH_STATE_S = 10*60;
 
 uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
@@ -42,26 +43,16 @@ PubSubClient client(net);
 const char *HOMEASSISTANT_STATUS_TOPIC = "homeassistant/status";
 const char *HOMEASSISTANT_STATUS_TOPIC_ALT = "ha/status";
 MqttDevice mqttDevice(composeClientID().c_str(), "Nuki", "Nuki ESP32 Bridge", "maker_pt");
-MqttLock mqttLock(&mqttDevice, "lock", "Nuki");
+MqttLock mqttLock(&mqttDevice, "lock", "");
 
-MqttSensor mqttBattery(&mqttDevice, "battery", "Nuki Battery");
-MqttBinarySensor mqttBatteryCritical(&mqttDevice, "battery_critical", "Nuki Battery Critical");
-MqttSensor mqttRestartCounter(&mqttDevice, "nuki_restart_counter", "Nuki Bridge Restart Counter");
+MqttSensor mqttBattery(&mqttDevice, "battery", "Battery");
+MqttBinarySensor mqttBatteryCritical(&mqttDevice, "battery_critical", "Battery Critical");
+MqttSensor mqttRestartCounter(&mqttDevice, "restart_counter", "Restart Counter");
 
 Preferences preferences;
 
-void batteryReport()
-{
-  Nuki::CmdResult result = nukiBle.requestBatteryReport(&_batteryReport);
-  if (result == Nuki::CmdResult::Success)
-  {
-    log_d("Bat report voltage: %d Crit state: %d, start temp: %d", _batteryReport.batteryVoltage, _batteryReport.criticalBatteryState, _batteryReport.startTemperature);
-  }
-  else
-  {
-    log_d("Bat report failed: %d", result);
-  }
-}
+NukiLock::KeyTurnerState g_state;
+
 
 bool getKeyTurnerStateFromLock()
 {
@@ -161,7 +152,7 @@ void connectToWifi()
 bool newCommandAvailable = false;
 NukiLock::LockAction newCommand = NukiLock::LockAction::Lock;
 
-bool notified = false;
+bool keyTurnerUpdateNotification = false;
 class Handler : public Nuki::SmartlockEventHandler
 {
 public:
@@ -170,7 +161,7 @@ public:
   {
     if (eventType == Nuki::EventType::KeyTurnerStatusUpdated)
     {
-      notified = true;
+      keyTurnerUpdateNotification = true;
     }
   }
 };
@@ -318,6 +309,9 @@ void setup()
   }
   nukiBle.saveSecurityPincode(nuki_pin);
   // nukiBle.unPairNuki();
+
+  // force first update
+  keyTurnerUpdateNotification = true;
 }
 unsigned long last_update = 0;
 
@@ -337,6 +331,7 @@ void loop()
     log_w("Mqtt not connected, trying to reconnect");
     connectToMqtt();
   }
+
   client.loop();
   ArduinoOTA.handle();
   scanner.update();
@@ -348,31 +343,34 @@ void loop()
       log_d("paired");
       nukiBle.setEventHandler(&handler);
       getConfig();
-      // force first state update
-      notified = true;
     }
   }
 
   if (newCommandAvailable)
   {
-    NukiLock::LockAction action = newCommand;
     newCommandAvailable = false;
-    for(int i = 0; i < 3 && nukiBle.lockAction(action, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success; i++)
+    for(int i = 0; i < 3 && nukiBle.lockAction(newCommand, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success; i++)
     {
       log_e("Failed to send lock command to lock action: 0x%x", newCommand);
-      sleep(2);
+      delay(2000);
     }
   }
 
-  // TODO verify impact of regular updating the lock on battery life
-  if (notified) // || millis() - last_update > 60000)
+  if (keyTurnerUpdateNotification)
   {
     if (getKeyTurnerStateFromLock())
     {
-      notified = false;
+      keyTurnerUpdateNotification = false;
       publishLockState(nukiBle);
       last_update = millis();
     }
   }
-  delay(500);
+
+  // we regularly send mqtt messages with the last state to make sure we are alive
+  if (millis() - last_update > PUBLISH_STATE_S * 1000)
+  {
+    publishLockState(nukiBle);
+  }
+
+  delay(100);
 }

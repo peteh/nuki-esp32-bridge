@@ -25,6 +25,7 @@
 #include "config.h"
 const uint WATCHDOG_TIMEOUT_S = 30;
 const uint32_t PUBLISH_STATE_S = 10 * 60;
+const uint32_t WIFI_DISCONNECT_RESTART_S = 60;
 
 uint32_t deviceId = 2020001;
 std::string deviceName = "Home";
@@ -224,6 +225,7 @@ void setup()
   WiFi.setAutoConnect(true);
   WiFi.begin(wifi_ssid, wifi_pass);
 
+  // TODO: this is pointless
   connectToWifi();
   ArduinoOTA.onStart([]()
                      {
@@ -289,8 +291,8 @@ void setup()
   // force first update
   g_keyTurnerUpdateNotification = true;
 }
-unsigned long last_update = 0;
-
+unsigned long g_last_update = 0;
+unsigned long g_last_wifiConnect = 0;
 void loop()
 {
   // reset watchdog, important to be called once each loop.
@@ -307,10 +309,16 @@ void loop()
     }
     g_wifiConnected = false;
     g_mqttConnected = false;
+    if (millis() - g_last_wifiConnect > WIFI_DISCONNECT_RESTART_S * 1000)
+    {
+      log_w("Going to do a forced restart because no wifi connection could be made");
+      esp_restart();
+    }
     delay(1000);
     return;
   }
   g_wifiConnected = true;
+  g_last_wifiConnect = millis();
   ArduinoOTA.handle();
 
   bool mqttConnected = connectToMqtt();
@@ -357,12 +365,12 @@ void loop()
     {
       g_keyTurnerUpdateNotification = false;
       g_mqttView.publishLockState(nukiBle, g_config);
-      last_update = millis();
+      g_last_update = millis();
     }
   }
 
   // we regularly send mqtt messages with the last state to make sure we are alive
-  // if (millis() - last_update > PUBLISH_STATE_S * 1000)
+  // if (millis() - g_last_update > PUBLISH_STATE_S * 1000)
   //{
   //  publishLockState(nukiBle);
   //}

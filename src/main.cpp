@@ -298,6 +298,7 @@ void loop()
 {
   // reset watchdog, important to be called once each loop.
   esp_task_wdt_reset();
+  scanner.update();
 
   bool wifiConnected = connectToWifi();
   if (!wifiConnected)
@@ -395,4 +396,5 @@ void loop()
   //}
 
   delay(100);
+  nukiBle.updateConnectionState();
 }

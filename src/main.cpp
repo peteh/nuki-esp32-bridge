@@ -135,7 +135,6 @@ bool connectToWifi()
   return WiFi.status() == WL_CONNECTED;
 }
 
-
 void callback(char *topic, byte *payload, unsigned int length)
 {
   log_d("Mqtt msg arrived [%s]", topic);
@@ -171,15 +170,17 @@ void callback(char *topic, byte *payload, unsigned int length)
     }
   }
   else if (strcmp(topic, g_mqttView.getDiagnosticsResetButton().getCommandTopic()) == 0)
-    {
-        bool pressed = strncmp((char *)payload, g_mqttView.getDiagnosticsResetButton().getPressState(), length) == 0;
-        g_config.restartCounter = 0;
-        g_config.mqttDisconnectCounter = 0;
-        g_config.wifiDisconnectCounter = 0;
-        saveSettings(g_config);
-        g_mqttView.publishLockState(nukiBle, g_config);
-    }
-
+  {
+    bool pressed = strncmp((char *)payload, g_mqttView.getDiagnosticsResetButton().getPressState(), length) == 0;
+    g_config.restartCounter = 0;
+    g_config.mqttDisconnectCounter = 0;
+    g_config.wifiDisconnectCounter = 0;
+    saveSettings(g_config);
+    NukiLock::KeyTurnerState state;
+    // only gets the current state in the lock, does not actively query it
+    nukiBle.retrieveKeyTunerState(&state);
+    g_mqttView.publishLockState(nukiBle, state.lockState, g_config);
+  }
 
   // publish config when homeassistant comes online and needs the configuration again
   else if (strcmp(topic, HOMEASSISTANT_STATUS_TOPIC) == 0 ||
@@ -203,22 +204,22 @@ void setup()
   esp_task_wdt_init(WATCHDOG_TIMEOUT_S, true); // enable panic so ESP32 restarts
   esp_task_wdt_add(NULL);                      // add current thread to WDT watch
 
-    if (!LittleFS.begin())
+  if (!LittleFS.begin())
+  {
+    log_e("Failed to mount file system");
+    delay(5000);
+    if (!formatLittleFS())
     {
-        log_e("Failed to mount file system");
-        delay(5000);
-        if (!formatLittleFS())
-        {
-            log_e("Failed to format file system - hardware issues!");
-            for (;;)
-            {
-                delay(100);
-            }
-        }
+      log_e("Failed to format file system - hardware issues!");
+      for (;;)
+      {
+        delay(100);
+      }
     }
-    loadSettings(g_config);
-    g_config.restartCounter++;
-    saveSettings(g_config);
+  }
+  loadSettings(g_config);
+  g_config.restartCounter++;
+  saveSettings(g_config);
 
   WiFi.setHostname(composeClientID().c_str());
   WiFi.mode(WIFI_STA);
@@ -352,6 +353,16 @@ void loop()
   if (g_newCommandAvailable)
   {
     g_newCommandAvailable = false;
+    if (g_newCommand == NukiLock::LockAction::Lock)
+    {
+      g_mqttView.publishLockState(nukiBle, NukiLock::LockState::Locking, g_config);
+      delay(100);
+    }
+    if (g_newCommand == NukiLock::LockAction::Unlock)
+    {
+      g_mqttView.publishLockState(nukiBle, NukiLock::LockState::Unlocking, g_config);
+      delay(100);
+    }
     for (int i = 0; i < 3 && nukiBle.lockAction(g_newCommand, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success; i++)
     {
       log_e("Failed to send lock command to lock action: 0x%x", g_newCommand);
@@ -363,8 +374,16 @@ void loop()
   {
     if (getKeyTurnerStateFromLock())
     {
+      NukiLock::KeyTurnerState state;
+      // only gets the current state in the lock, does not actively query it
+      nukiBle.retrieveKeyTunerState(&state);
       g_keyTurnerUpdateNotification = false;
-      g_mqttView.publishLockState(nukiBle, g_config);
+      g_mqttView.publishLockState(nukiBle, state.lockState, g_config);
+      if(state.lockState == NukiLock::LockState::Locking || state.lockState == NukiLock::LockState::Unlocking)
+      {
+        // force state update because we are transitioning anyway
+        g_keyTurnerUpdateNotification = true;
+      }
       g_last_update = millis();
     }
   }

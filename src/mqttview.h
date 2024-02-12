@@ -85,22 +85,39 @@ public:
         publishConfig(m_diagnosticsRestartCounter);
         publishConfig(m_diagnosticsWifiDisconnectCounter);
         publishConfig(m_diagnosticsMqttDisconnectCounter);
-
     }
 
-    void publishLockState(NukiLock::NukiLock &nuki, Config& config)
+    void publishLockState(NukiLock::NukiLock &nuki, NukiLock::LockState lockState, Config &config)
     {
-        NukiLock::KeyTurnerState state;
-
-        // only gets the current state in the lock, does not actively query it
-        nuki.retrieveKeyTunerState(&state);
         char buffer[255];
+        const char *lockStateStr;
+        switch (lockState)
+        {
+        case NukiLock::LockState::Locked:
+            lockStateStr = m_lock.getLockedState();
+            break;
+        case NukiLock::LockState::Locking:
+            lockStateStr = m_lock.getLockingState();
+            break;
+        case NukiLock::LockState::Unlocked:
+            lockStateStr = m_lock.getUnlockedState();
+            break;
+        case NukiLock::LockState::Unlocking:
+        case NukiLock::LockState::Unlatching:
+        case NukiLock::LockState::Unlatched:
+        case NukiLock::LockState::UnlockedLnga:
+            lockStateStr = m_lock.getUnlockingState();
+            break;
+        default:
+            lockStateStr = m_lock.getUnlockedState();
+            break;
+        }
         snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\", \"wifi_disconnect_counter\": %u, \"mqtt_disconnect_counter\": %u, \"restart_counter\": %u}",
-                 state.lockState == NukiLock::LockState::Locked ? m_lock.getLockedState() : m_lock.getUnlockedState(),
+                 lockStateStr,
                  nuki.getBatteryPerc(),
                  nuki.isBatteryCritical() ? m_batteryCritical.getOnState() : m_batteryCritical.getOffState(),
-                 config.wifiDisconnectCounter, 
-                 config.mqttDisconnectCounter, 
+                 config.wifiDisconnectCounter,
+                 config.mqttDisconnectCounter,
                  config.restartCounter);
 
         m_client->publish(m_lock.getStateTopic(), buffer);

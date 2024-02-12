@@ -339,7 +339,6 @@ void loop()
 
   g_client.loop();
   ArduinoOTA.handle();
-  scanner.update();
   if (!nukiBle.isPairedWithLock())
   {
     if (nukiBle.pairNuki() == Nuki::PairingResult::Success)

@@ -52,7 +52,7 @@ If the MQTT extension for HA is installed, and the config.h is configured to con
 You can buy a nuki lock directly from their website: 
 https://shop.nuki.io/en/
 
-Code for 30EUR off: REF6GQGS87DGY (let me know if it doesn't work anymore and you want a working code)
+Code for 10% off: REFMMG3CQPAS5 (let me know if it doesn't work anymore and you want a working code)
 
 The ESP32, e.g. Lolin D32 can be acquired on Amazon: 
 https://amzn.to/38GDcmo

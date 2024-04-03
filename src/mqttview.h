@@ -18,6 +18,7 @@ public:
           m_batteryCritical(&m_device, "battery_critical", "Battery Critical"),
 
           // Diagnostics Elements
+          m_bssid(&m_device, "diagnostics_bssid", "BSSID"),
           m_diagnosticsResetButton(&m_device, "diagnostics_reset_btn", "Reset Counters"),
           m_diagnosticsRestartCounter(&m_device, "diagnostics_restart_counter", "Restart Counter"),
           m_diagnosticsWifiDisconnectCounter(&m_device, "diagnostics_wifidisconnect_counter", "WiFi Disconnect Counter"),
@@ -36,6 +37,11 @@ public:
         m_batteryCritical.setCustomStateTopic(m_lock.getStateTopic());
         m_batteryCritical.setValueTemplate("{{value_json.battery_critical}}");
         m_batteryCritical.setDeviceClass("battery");
+
+        m_bssid.setCustomStateTopic(m_lock.getStateTopic());
+        m_bssid.setValueTemplate("{{value_json.bssid}}");
+        m_bssid.setEntityType(EntityCategory::DIAGNOSTIC);
+        m_bssid.setIcon("mdi:wifi");
 
         m_diagnosticsResetButton.setEntityType(EntityCategory::DIAGNOSTIC);
         m_diagnosticsResetButton.setDeviceClass("restart");
@@ -85,9 +91,10 @@ public:
         publishConfig(m_diagnosticsRestartCounter);
         publishConfig(m_diagnosticsWifiDisconnectCounter);
         publishConfig(m_diagnosticsMqttDisconnectCounter);
+        publishConfig(m_bssid);
     }
 
-    void publishLockState(NukiLock::NukiLock &nuki, NukiLock::LockState lockState, Config &config)
+    void publishLockState(NukiLock::NukiLock &nuki, NukiLock::LockState lockState, const char* bssid, Config &config)
     {
         char buffer[255];
         const char *lockStateStr;
@@ -112,10 +119,11 @@ public:
             lockStateStr = m_lock.getUnlockedState();
             break;
         }
-        snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\", \"wifi_disconnect_counter\": %u, \"mqtt_disconnect_counter\": %u, \"restart_counter\": %u}",
+        snprintf(buffer, sizeof(buffer), "{\"state\": \"%s\", \"battery\": %d, \"battery_critical\": \"%s\", \"bssid\": \"%s\", \"wifi_disconnect_counter\": %u, \"mqtt_disconnect_counter\": %u, \"restart_counter\": %u}",
                  lockStateStr,
                  nuki.getBatteryPerc(),
                  nuki.isBatteryCritical() ? m_batteryCritical.getOnState() : m_batteryCritical.getOffState(),
+                 bssid, 
                  config.wifiDisconnectCounter,
                  config.mqttDisconnectCounter,
                  config.restartCounter);
@@ -136,6 +144,7 @@ private:
     MqttSensor m_diagnosticsRestartCounter;
     MqttSensor m_diagnosticsWifiDisconnectCounter;
     MqttSensor m_diagnosticsMqttDisconnectCounter;
+    MqttSensor m_bssid;
 
     void publishConfig(MqttEntity &entity)
     {

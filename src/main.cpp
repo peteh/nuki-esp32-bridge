@@ -49,6 +49,9 @@ bool g_keyTurnerUpdateNotification = false;
 
 bool g_wifiConnected = false;
 bool g_mqttConnected = false;
+String g_bssid = "";
+
+bool g_otaUpdate = false;
 
 bool getKeyTurnerStateFromLock()
 {
@@ -179,7 +182,7 @@ void callback(char *topic, byte *payload, unsigned int length)
     NukiLock::KeyTurnerState state;
     // only gets the current state in the lock, does not actively query it
     nukiBle.retrieveKeyTunerState(&state);
-    g_mqttView.publishLockState(nukiBle, state.lockState, g_config);
+    g_mqttView.publishLockState(nukiBle, state.lockState, g_bssid.c_str(), g_config);
   }
 
   // publish config when homeassistant comes online and needs the configuration again
@@ -224,7 +227,11 @@ void setup()
   WiFi.setHostname(composeClientID().c_str());
   WiFi.mode(WIFI_STA);
   WiFi.setAutoConnect(true);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  
   WiFi.begin(wifi_ssid, wifi_pass);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
 
   // TODO: this is pointless
   connectToWifi();
@@ -238,10 +245,13 @@ void setup()
     }
 
     // NOTE: if updating FS this would be the place to unmount FS using FS.end()
-    log_i("Start updating %s", type); });
+    log_i("Start updating %s", type); 
+    g_otaUpdate = true;
+    });
 
   ArduinoOTA.onEnd([]()
-                   { log_i("End Update"); });
+                   { g_otaUpdate = false;
+                   log_i("End Update"); });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
                         {
@@ -268,6 +278,7 @@ void setup()
 
   log_i("Connected to SSID: %s", wifi_ssid);
   log_i("IP address: %s", WiFi.localIP());
+  g_bssid = WiFi.BSSIDstr();
 
   g_client.setBufferSize(1024);
   g_client.setServer(mqtt_server, mqtt_port);
@@ -339,6 +350,21 @@ void loop()
 
   g_client.loop();
   ArduinoOTA.handle();
+  if(g_otaUpdate)
+  {
+    // skip processing if we are processing ota updates
+    return;
+  }
+
+  if (!WiFi.BSSIDstr().equals(g_bssid))
+  {
+    g_bssid = WiFi.BSSIDstr();
+    NukiLock::KeyTurnerState state;
+    // only gets the current state in the lock, does not actively query it
+    nukiBle.retrieveKeyTunerState(&state);
+    g_mqttView.publishLockState(nukiBle, state.lockState, g_bssid.c_str(), g_config);
+  }
+
   if (!nukiBle.isPairedWithLock())
   {
     if (nukiBle.pairNuki() == Nuki::PairingResult::Success)
@@ -355,12 +381,12 @@ void loop()
     g_newCommandAvailable = false;
     if (g_newCommand == NukiLock::LockAction::Lock)
     {
-      g_mqttView.publishLockState(nukiBle, NukiLock::LockState::Locking, g_config);
+      g_mqttView.publishLockState(nukiBle, NukiLock::LockState::Locking, g_bssid.c_str(), g_config);
       delay(100);
     }
     if (g_newCommand == NukiLock::LockAction::Unlock)
     {
-      g_mqttView.publishLockState(nukiBle, NukiLock::LockState::Unlocking, g_config);
+      g_mqttView.publishLockState(nukiBle, NukiLock::LockState::Unlocking, g_bssid.c_str(), g_config);
       delay(100);
     }
     for (int i = 0; i < 3 && nukiBle.lockAction(g_newCommand, deviceId, 0, NULL, 0) != Nuki::CmdResult::Success; i++)
@@ -378,7 +404,7 @@ void loop()
       // only gets the current state in the lock, does not actively query it
       nukiBle.retrieveKeyTunerState(&state);
       g_keyTurnerUpdateNotification = false;
-      g_mqttView.publishLockState(nukiBle, state.lockState, g_config);
+      g_mqttView.publishLockState(nukiBle, state.lockState, g_bssid.c_str(), g_config);
       if(state.lockState == NukiLock::LockState::Locking || state.lockState == NukiLock::LockState::Unlocking)
       {
         // force state update because we are transitioning anyway
